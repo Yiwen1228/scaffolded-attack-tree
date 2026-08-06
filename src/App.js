@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import './App.css';
 
 const API_URL = 'http://127.0.0.1:5000';
@@ -28,6 +28,39 @@ const SYNONYMS = {
   "Disable Device": ["disable device", "turn off device", "brick device", "shut down device", "device disruption"],
   "Firmware Attack": ["firmware attack", "malicious firmware", "firmware exploit", "corrupt firmware", "firmware compromise"],
   "Network Intrusion": ["network intrusion", "network attack", "intrude network", "break into network", "network breach"]
+};
+
+// Precision-focused matching for detailed, free-form descriptions. A single
+// loose keyword is NOT enough on its own (too easy to false-positive) —
+// each group below lists words that must ALL appear together somewhere in
+// the participant's text. A reference node matches if ANY one full group is
+// satisfied. This lets someone write a long, specific sentence and still be
+// recognised correctly, without loosening precision to "any one word hits".
+const SIGNAL_GROUPS = {
+  "Steal Credentials": [["steal", "password"], ["steal", "credential"], ["steal", "login"], ["obtain", "credential"]],
+  "Phishing Attack": [["phish"], ["fake", "email"], ["impersonat", "email"], ["fake", "link"], ["spoof", "email"], ["trick", "email"]],
+  "Brute Force Password": [["brute"], ["guess", "password"], ["try", "password"], ["automat", "password"], ["dictionary", "attack"]],
+  "SQL Injection": [["sql"], ["inject", "database"], ["inject", "query"]],
+  "Session Hijacking": [["session", "hijack"], ["steal", "session"], ["steal", "cookie"], ["session", "token"]],
+  "Modify Grades": [["change", "grade"], ["alter", "grade"], ["modify", "grade"], ["edit", "grade"], ["tamper", "grade"]],
+  "Steal Personal Data": [["steal", "data"], ["steal", "personal"], ["exfiltrat"], ["leak", "data"], ["data", "breach"]],
+  "Denial of Service": [["denial"], ["ddos"], ["dos", "attack"], ["flood"], ["overload"], ["overwhelm"]],
+  "Man in the Middle": [["man", "middle"], ["mitm"], ["intercept", "traffic"], ["intercept", "communicat"], ["intercept", "network"]],
+  "Fraudulent Transfer": [["fraudulent", "transfer"], ["unauthoris", "transfer"], ["unauthoriz", "transfer"], ["steal", "money"], ["transfer", "money"]],
+  "Steal Financial Data": [["steal", "financial"], ["steal", "payment"], ["steal", "card"], ["steal", "bank"], ["credit", "card", "theft"]],
+  "Access Patient Records": [["patient", "access"], ["patient", "steal"], ["patient", "view"], ["patient", "read"], ["patient", "download"], ["patient", "expose"]],
+  "Modify Patient Records": [["patient", "modify"], ["patient", "alter"], ["patient", "change"], ["patient", "tamper"], ["patient", "edit"]],
+  "Ransomware Attack": [["ransom"], ["encrypt", "file"], ["encrypt", "data"]],
+  "Insider Threat": [["insider"], ["employee", "misuse"], ["employee", "abuse"], ["rogue", "employee"], ["disgruntled"], ["malicious", "employee"]],
+  "Steal Payment Info": [["steal", "payment"], ["steal", "card"], ["card", "skim"], ["steal", "checkout"], ["intercept", "payment"]],
+  "Fake Reviews": [["fake", "review"], ["false", "review"], ["review", "manipulat"], ["review", "fraud"]],
+  "Price Manipulation": [["price", "manipulat"], ["change", "price"], ["alter", "price"], ["price", "tamper"]],
+  "Account Takeover": [["account", "takeover"], ["take", "over", "account"], ["hijack", "account"], ["compromise", "account"]],
+  "Control Device": [["control", "device"], ["remote", "control"], ["hijack", "device"], ["take", "control"]],
+  "Eavesdrop": [["eavesdrop"], ["spy"], ["listen", "in"], ["intercept", "audio"], ["intercept", "video"], ["monitor", "user"]],
+  "Disable Device": [["disable", "device"], ["shut", "down"], ["turn", "off", "device"], ["brick", "device"]],
+  "Firmware Attack": [["firmware"]],
+  "Network Intrusion": [["network", "intrusion"], ["network", "breach"], ["intrude", "network"], ["break", "network"], ["network", "attack"]]
 };
 
 // Expanded suggestions with descriptions and example usage
@@ -269,12 +302,117 @@ const SCENARIOS = [
 ];
 
 const TUTORIAL_TREE = [
-  { id: 0, label: "Compromise a Simple Website", parentId: null, logic: null },
-  { id: 1, label: "Steal Password", parentId: 0, logic: "OR" },
-  { id: 2, label: "Phishing", parentId: 1, logic: "OR" },
-  { id: 3, label: "Brute Force", parentId: 1, logic: "OR" },
-  { id: 4, label: "SQL Injection", parentId: 0, logic: "OR" }
+  { id: 0, label: "Compromise FitTrack Fitness App", parentId: null, logic: null },
+  { id: 1, label: "Steal Login Credentials", parentId: 0, logic: "OR" },
+  { id: 2, label: "Phishing via Fake Password-Reset Email", parentId: 1, logic: "OR" },
+  { id: 3, label: "Credential Stuffing via Leaked Gym Database", parentId: 1, logic: "OR" },
+  { id: 4, label: "Exploit Unauthenticated Workout-Data API", parentId: 0, logic: "OR" }
 ];
+
+// A short, fixed description of the demo scenario, shown above the
+// animation so the steps below have concrete context to refer back to.
+const TUTORIAL_SCENARIO = "FitTrack is a fitness app that logs users' GPS running routes, lets partner gyms' membership systems log users in with the same email/password, and shows a social feed of recent workouts fetched from a backend API.";
+
+const TUTORIAL_STEPS = [
+  { nodeId: 0, caption: "The attacker's goal is to compromise FitTrack specifically — for example, to pull a user's exact GPS running routes, which often reveal their home address (most runs start and end there). This goal becomes the root node." },
+  { nodeId: 1, caption: "FitTrack requires an email and password to log in, so gaining valid credentials is the most direct route in — this becomes the first branch, to be broken down into specific methods." },
+  { nodeId: 2, caption: "FitTrack genuinely emails password-reset links from \"noreply@fittrack-app.com\". An attacker registers the lookalike domain \"fittrack-security-app.com\" and sends an almost identical reset email — because users already expect this exact kind of email from FitTrack, they're primed to click without checking the sender closely." },
+  { nodeId: 3, caption: "FitTrack lets several partner gym chains' membership systems log in with the same email/password. Some of those gym chains have had their own separate customer databases leaked in unrelated breaches — so the attacker doesn't need to trick anyone, just try those leaked email/password pairs directly against FitTrack, relying on people reusing passwords across their gym and fitness apps. This is connected to phishing with OR, since either method alone gets the attacker in." },
+  { nodeId: 4, caption: "Separately, FitTrack's app fetches a user's workout history for the social feed from a backend API. An earlier version of this endpoint only checked that a session token was valid — not that it belonged to the specific user being requested — so calling it with a different user's ID returns their exact GPS routes. No password needed at all, so this is a fully independent path to the same goal." }
+];
+
+function AnimatedTreeDemo() {
+  const [revealedCount, setRevealedCount] = useState(0);
+  const [playing, setPlaying] = useState(false);
+  const intervalRef = useRef(null);
+
+  useEffect(() => {
+    if (playing) {
+      intervalRef.current = setInterval(() => {
+        setRevealedCount(prev => {
+          if (prev >= TUTORIAL_STEPS.length) {
+            setPlaying(false);
+            return prev;
+          }
+          return prev + 1;
+        });
+      }, 2200);
+    }
+    return () => clearInterval(intervalRef.current);
+  }, [playing]);
+
+  useEffect(() => {
+    if (revealedCount >= TUTORIAL_STEPS.length) setPlaying(false);
+  }, [revealedCount]);
+
+  const handlePlay = () => {
+    if (revealedCount >= TUTORIAL_STEPS.length) setRevealedCount(0);
+    setPlaying(true);
+  };
+  const handlePause = () => setPlaying(false);
+  const handleReplay = () => { setRevealedCount(0); setPlaying(true); };
+
+  const visibleIds = TUTORIAL_STEPS.slice(0, revealedCount).map(s => s.nodeId);
+  const currentCaption = revealedCount > 0 ? TUTORIAL_STEPS[revealedCount - 1].caption : "Click play to watch the attack tree being built up, step by step.";
+
+  const renderNode = (nodeId, depth = 0) => {
+    if (!visibleIds.includes(nodeId)) return null;
+    const node = TUTORIAL_TREE.find(n => n.id === nodeId);
+    if (!node) return null;
+    const children = TUTORIAL_TREE.filter(n => n.parentId === nodeId);
+    const isNewest = TUTORIAL_STEPS[revealedCount - 1]?.nodeId === nodeId;
+    return (
+      <div key={nodeId} style={{ marginLeft: depth * 20, marginTop: 4, animation: isNewest ? 'fadeIn 0.5s ease' : 'none' }}>
+        {node.logic && <span style={{ fontSize: 10, background: '#0891b2', color: 'white', padding: '1px 5px', borderRadius: 3, marginRight: 4 }}>{node.logic}</span>}
+        <span style={{ display: 'inline-block', padding: '5px 12px', borderRadius: 6, background: depth === 0 ? '#1e3a5f' : '#1e293b', color: 'white', fontSize: 13, border: isNewest ? '2px solid #f59e0b' : '1px solid #334155' }}>
+          {depth === 0 ? '🎯' : '🔴'} {node.label}
+        </span>
+        {children.length > 0 && <div style={{ borderLeft: '2px solid #334155', marginLeft: 14, paddingLeft: 6 }}>{children.map(child => renderNode(child.id, depth + 1))}</div>}
+      </div>
+    );
+  };
+
+  return (
+    <div style={{ background: '#1e293b', borderRadius: 8, padding: 16, marginBottom: 24 }}>
+      <style>{`@keyframes fadeIn { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: translateY(0); } }`}</style>
+      <h3 style={{ fontSize: 14, fontWeight: 'bold', marginBottom: 6 }}>🎬 Animated Demo: How an Attack Tree Gets Built</h3>
+      <p style={{ color: '#94a3b8', fontSize: 12, marginBottom: 12, lineHeight: 1.6 }}>{TUTORIAL_SCENARIO}</p>
+      <div style={{ background: '#0f172a', borderRadius: 8, padding: 14, marginBottom: 12, minHeight: 160 }}>
+        {revealedCount === 0 ? (
+          <p style={{ color: '#475569', fontSize: 13 }}>Click "Play" to start the demonstration</p>
+        ) : renderNode(0)}
+      </div>
+      <div style={{ background: '#0f172a', borderRadius: 6, padding: 12, marginBottom: 12, minHeight: 40 }}>
+        <p style={{ color: '#fcd34d', fontSize: 13, lineHeight: 1.6 }}>💬 {currentCaption}</p>
+      </div>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+        {!playing ? (
+          <button onClick={handlePlay} style={{ padding: '6px 14px', background: '#2563eb', color: 'white', border: 'none', borderRadius: 5, cursor: 'pointer', fontSize: 12, fontWeight: 'bold' }}>
+            ▶️ {revealedCount >= TUTORIAL_STEPS.length ? 'Play Again' : revealedCount > 0 ? 'Resume' : 'Play'}
+          </button>
+        ) : (
+          <button onClick={handlePause} style={{ padding: '6px 14px', background: '#f59e0b', color: '#000', border: 'none', borderRadius: 5, cursor: 'pointer', fontSize: 12, fontWeight: 'bold' }}>
+            ⏸️ Pause
+          </button>
+        )}
+        <button onClick={handleReplay} style={{ padding: '6px 14px', background: 'none', border: '1px solid #475569', color: '#94a3b8', borderRadius: 5, cursor: 'pointer', fontSize: 12 }}>
+          🔄 Replay
+        </button>
+        <span style={{ color: '#475569', fontSize: 11, marginLeft: 4 }}>{revealedCount}/{TUTORIAL_STEPS.length} steps</span>
+      </div>
+    </div>
+  );
+}
+
+// Checks the precision signal groups for a reference node: returns the
+// first fully-satisfied group (all its words present in the user's text),
+// or null if none match. A group must be satisfied in full — a single word
+// from a multi-word group is never enough.
+function matchSignalGroups(user, referenceNode) {
+  const groups = SIGNAL_GROUPS[referenceNode];
+  if (!groups) return null;
+  return groups.find(group => group.every(word => user.includes(word))) || null;
+}
 
 function matchNode(userLabel, referenceNode) {
   const user = userLabel.toLowerCase().trim();
@@ -282,7 +420,79 @@ function matchNode(userLabel, referenceNode) {
   if (user === ref) return true;
   if (user.includes(ref) || ref.includes(user)) return true;
   const synonymList = SYNONYMS[referenceNode] || [];
-  return synonymList.some(syn => user.includes(syn) || syn.includes(user));
+  if (synonymList.some(syn => user.includes(syn) || syn.includes(user))) return true;
+  return !!matchSignalGroups(user, referenceNode);
+}
+
+// Explains *why* a user's node was judged to match a reference node — used
+// to make the scoring transparent instead of a black box (click-to-explain
+// in the results view).
+function explainMatch(userLabel, referenceNode) {
+  const user = userLabel.toLowerCase().trim();
+  const ref = referenceNode.toLowerCase().trim();
+  if (user === ref) {
+    return { type: 'exact', detail: `Your text matches "${referenceNode}" exactly.` };
+  }
+  if (user.includes(ref) || ref.includes(user)) {
+    return { type: 'substring', detail: `Your text "${userLabel}" and the reference term "${referenceNode}" share the same core wording.` };
+  }
+  const synonymList = SYNONYMS[referenceNode] || [];
+  const hitSynonym = synonymList.find(syn => user.includes(syn) || syn.includes(user));
+  if (hitSynonym) {
+    return { type: 'synonym', detail: `Your text "${userLabel}" was recognised as equivalent to "${referenceNode}" via the known synonym "${hitSynonym}".` };
+  }
+  const signalGroup = matchSignalGroups(user, referenceNode);
+  if (signalGroup) {
+    return { type: 'signal', detail: `Your text "${userLabel}" was recognised as "${referenceNode}" because it contains this specific combination of terms: ${signalGroup.join(' + ')}.` };
+  }
+  return { type: 'unknown', detail: `Matched to "${referenceNode}", but the exact reason could not be determined.` };
+}
+
+// Pairs of keywords that, when they appear as separate OR-connected sibling
+// nodes, usually indicate the participant meant AND (both are needed
+// together) rather than OR (either one is enough). Used for structural
+// scaffolding — pointing out likely logic-relationship mistakes.
+const AND_HINT_PAIRS = [
+  ['username', 'password'], ['email', 'password'], ['card number', 'cvv'],
+  ['otp', 'password'], ['token', 'password'], ['pin', 'card'], ['id', 'password']
+];
+
+function findLogicIssues(nodes) {
+  const issues = [];
+  const siblingGroups = {};
+  nodes.forEach(n => {
+    if (n.parentId === null) return;
+    if (!siblingGroups[n.parentId]) siblingGroups[n.parentId] = [];
+    siblingGroups[n.parentId].push(n);
+  });
+  Object.values(siblingGroups).forEach(siblings => {
+    if (siblings.length < 2) return;
+    if (!siblings.every(s => s.logic === 'OR')) return;
+    for (let i = 0; i < siblings.length; i++) {
+      for (let j = i + 1; j < siblings.length; j++) {
+        const a = siblings[i].label.toLowerCase();
+        const b = siblings[j].label.toLowerCase();
+        const pairHit = AND_HINT_PAIRS.some(([x, y]) =>
+          (a.includes(x) && b.includes(y)) || (a.includes(y) && b.includes(x))
+        );
+        if (pairHit) {
+          issues.push({ nodeIds: [siblings[i].id, siblings[j].id], labels: [siblings[i].label, siblings[j].label] });
+        }
+      }
+    }
+  });
+  return issues;
+}
+
+// A "shallow" node: a direct child of the root that has not been broken
+// down any further. Used for structural scaffolding when the whole tree is
+// still flat (root + one layer only) — nudging the participant to go one
+// level deeper rather than only adding more siblings.
+function findShallowNode(nodes) {
+  const root = nodes.find(n => n.isRoot) || nodes.find(n => n.parentId === null);
+  if (!root) return null;
+  const topLevel = nodes.filter(n => n.parentId === root.id);
+  return topLevel.find(n => !nodes.some(c => c.parentId === n.id)) || null;
 }
 
 // Smart completeness: score across categories
@@ -295,6 +505,16 @@ function evaluateTree(nodes, scenario) {
   const matched = referenceNodes.filter(ref =>
     userLabels.some(label => matchNode(label, ref))
   );
+
+  // Explainable detail per match — which user node matched which reference
+  // node, and why (exact / substring / synonym).
+  const matchedDetails = referenceNodes
+    .map(ref => {
+      const hitLabel = userLabels.find(label => matchNode(label, ref));
+      if (!hitLabel) return null;
+      return { referenceNode: ref, userLabel: hitLabel, explanation: explainMatch(hitLabel, ref) };
+    })
+    .filter(Boolean);
 
   // Category coverage
   const categoryScores = {};
@@ -334,6 +554,10 @@ function evaluateTree(nodes, scenario) {
     .filter(([_, s]) => s.matched === 0)
     .map(([cat]) => cat);
 
+  // Structural diagnostics — used by the Socratic hint system to give
+  // feedback on tree structure, not just content coverage.
+  const logicIssues = findLogicIssues(nodes);
+
   return {
     total: nodes.length,
     matched: matched.length,
@@ -343,31 +567,128 @@ function evaluateTree(nodes, scenario) {
     categoryPercentage,
     categoryScores,
     matchedNodes: matched,
+    matchedDetails,
     missingCategories,
+    logicIssues,
     maxDepth
   };
 }
 
-// Generate smart hint based on missing categories
-function getSmartHint(missingCategories, scenario) {
-  const hintMap = {
-    "Access": "Have you considered all the ways an attacker might gain initial access to the system? Think about the login process and network entry points.",
-    "Data Theft": "Think about what sensitive data exists in this system. How could an attacker steal it without being detected?",
-    "Data Manipulation": "Consider what damage an attacker could do by modifying data rather than stealing it. What records could be changed?",
-    "Disruption": "Have you thought about attacks that don't steal data but instead make the system unavailable? How could an attacker disrupt the service?",
-    "Financial": "Think about the financial aspects of this system. What transactions or payment data could an attacker target?",
-    "Manipulation": "Consider how an attacker might manipulate the content or pricing in this system for their own benefit.",
-    "Insider": "Don't forget that not all attackers are outsiders. Could someone with legitimate access misuse their privileges?",
-    "Control": "Think about what an attacker could do if they gained physical or remote control of this device.",
-    "Privacy": "Consider privacy-based attacks — could an attacker use this system to spy on or monitor users?",
-  };
+// Each category maps to a small ladder of Socratic prompts: level 1 asks an
+// open question (no jargon), level 2 narrows the question, level 3 finally
+// names a concrete term. The participant has to click through levels rather
+// than being handed the answer immediately — see getSocraticPrompt.
+const CATEGORY_SOCRATIC = {
+  "Access": {
+    q1: "How might an attacker gain their very first foothold in this system? Think about the login process and any network entry points.",
+    q2: "Think specifically about ways to get in *without* the correct credentials, or by intercepting them.",
+    term: "e.g. phishing, brute force, SQL injection, session hijacking"
+  },
+  "Data Theft": {
+    q1: "What sensitive data exists in this system? How might an attacker take a copy of it without being noticed?",
+    q2: "Think about data being extracted or exfiltrated, not changed.",
+    term: "e.g. stealing personal or patient data"
+  },
+  "Data Manipulation": {
+    q1: "Instead of stealing data, could an attacker cause harm just by changing it?",
+    q2: "Think about which records, if quietly altered, would cause real damage.",
+    term: "e.g. modifying grades or patient records"
+  },
+  "Disruption": {
+    q1: "Could an attacker succeed without stealing or changing anything at all — just by making the system unavailable?",
+    q2: "Think about overwhelming the system with traffic or requests.",
+    term: "e.g. denial of service"
+  },
+  "Financial": {
+    q1: "What financial transactions or payment data exist here that an attacker might target?",
+    q2: "Think about money or funds moving without proper authorisation.",
+    term: "e.g. fraudulent transfer, stealing financial data"
+  },
+  "Manipulation": {
+    q1: "Could an attacker benefit by changing what other users see, rather than stealing anything?",
+    q2: "Think about content or pricing being altered.",
+    term: "e.g. fake reviews, price manipulation"
+  },
+  "Insider": {
+    q1: "Not all attackers come from outside the organisation — could someone who already has legitimate access misuse it?",
+    q2: "Think about employees or other trusted users.",
+    term: "e.g. insider threat"
+  },
+  "Control": {
+    q1: "If an attacker gained control of this device, what could they actually do with it?",
+    q2: "Think about remote control, or disabling it entirely.",
+    term: "e.g. device hijacking, disabling the device"
+  },
+  "Privacy": {
+    q1: "Could this system be used to spy on or monitor its users without their knowledge?",
+    q2: "Think about audio, video, or location data specifically.",
+    term: "e.g. eavesdropping"
+  }
+};
 
-  if (missingCategories.length === 0) {
-    return "Great work! You have covered all major attack categories. Consider adding more specific sub-attacks to deepen your tree.";
+function generateCategoryQuestion(category, level) {
+  const c = CATEGORY_SOCRATIC[category];
+  if (!c) return { level: 3, question: `Consider attacks in the "${category}" category — you haven't covered this area yet.`, term: null };
+  if (level <= 1) return { level: 1, question: c.q1, term: null };
+  if (level === 2) return { level: 2, question: c.q2, term: null };
+  return { level: 3, question: `Specific idea to consider: ${c.term}.`, term: c.term };
+}
+
+function generateExpansionQuestion(node, level) {
+  if (level <= 1) {
+    return { level: 1, question: `You added "${node.label}" — but how exactly would an attacker carry that out? Try to think of it as a first step, not the whole picture.`, term: null };
+  }
+  return { level: 2, question: `Can you break "${node.label}" down into at least two more specific, concrete methods and add them as its children?`, term: null };
+}
+
+function generateLogicQuestion(issue, level) {
+  if (level <= 1) {
+    return { level: 1, question: `You marked "${issue.labels[0]}" and "${issue.labels[1]}" as OR, meaning either one alone is enough — is that really true here?`, term: null };
+  }
+  return { level: 2, question: `If an attacker only had "${issue.labels[0]}" but not "${issue.labels[1]}" (or vice versa), could they still succeed? If not, consider changing this relationship to AND.`, term: 'AND logic' };
+}
+
+// The main Socratic hint function. It looks at the CURRENT tree's full
+// state — content, structure, logic relationships, and (if available)
+// patterns from the participant's earlier scenarios in this session — and
+// picks whichever issue is most useful to raise right now. Nothing here is
+// a fixed rotating script: the same tree state will always produce the same
+// diagnosis, but two different trees will very likely produce different
+// prompts.
+function getSocraticPrompt(nodes, scenario, evaluation, sessionHistory, hintLevel) {
+  // Priority 1: a category this participant has also missed in an earlier
+  // scenario this session — cross-scenario pattern, not just this tree.
+  if (sessionHistory && sessionHistory.length > 0) {
+    const pastMissing = sessionHistory.flatMap(h => h.missingCategories || []);
+    const repeatedCategory = evaluation.missingCategories.find(cat => pastMissing.includes(cat));
+    if (repeatedCategory) {
+      const base = generateCategoryQuestion(repeatedCategory, hintLevel);
+      return {
+        ...base,
+        question: hintLevel >= 2 ? base.question : `${base.question} (You've also missed this category in an earlier scenario — worth double-checking this time.)`,
+        source: 'pattern'
+      };
+    }
   }
 
-  const missing = missingCategories[0];
-  return hintMap[missing] || `Consider attacks in the "${missing}" category — you haven't covered this area yet.`;
+  // Priority 2: an AND/OR logic relationship that looks wrong.
+  const logicIssues = evaluation.logicIssues || [];
+  if (logicIssues.length > 0) {
+    return { ...generateLogicQuestion(logicIssues[0], hintLevel), source: 'logic' };
+  }
+
+  // Priority 3: the tree is still flat (no node has been broken down further).
+  if (evaluation.maxDepth <= 1) {
+    const shallow = findShallowNode(nodes);
+    if (shallow) return { ...generateExpansionQuestion(shallow, hintLevel), source: 'structure' };
+  }
+
+  // Priority 4: a missing attack category, based on the current tree only.
+  if (evaluation.missingCategories.length > 0) {
+    return { ...generateCategoryQuestion(evaluation.missingCategories[0], hintLevel), source: 'category' };
+  }
+
+  return { level: 3, question: "Great coverage across categories! Try picking one existing node and breaking it down further — how exactly would each step be carried out?", term: null, source: 'complete' };
 }
 
 let nodeIdCounter = 100;
@@ -416,11 +737,12 @@ function Tutorial({ onComplete }) {
           <p style={{ color: '#64748b', fontSize: 12, marginTop: 6 }}>Example: Steal Username AND Steal Password — both are needed to log in.</p>
         </div>
       </div>
+      <AnimatedTreeDemo />
       <div style={{ background: '#1e293b', borderRadius: 8, padding: 16, marginBottom: 24 }}>
         <h3 style={{ fontSize: 14, fontWeight: 'bold', marginBottom: 12 }}>📋 Example Attack Tree</h3>
         <div style={{ background: '#0f172a', borderRadius: 8, padding: 14, marginBottom: 12 }}>{renderTutorialTree(0)}</div>
         <p style={{ color: '#94a3b8', fontSize: 13, lineHeight: 1.6 }}>
-          In this example, an attacker can compromise a website by either stealing the password (via phishing OR brute force) OR by using SQL injection. Any one path leads to success.
+          In this example, an attacker can compromise FitTrack either by stealing login credentials (via phishing OR credential stuffing from a leaked gym database) OR by directly exploiting the unauthenticated workout-data API. Any one path leads to success.
         </p>
       </div>
       <button onClick={onComplete} style={{ padding: '12px 28px', background: '#2563eb', color: 'white', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 15, fontWeight: 'bold' }}>
@@ -491,7 +813,7 @@ function SuggestionPanel({ suggestions, onSelect, userNodes }) {
   );
 }
 
-function TreeBuilder({ scenario, onComplete, sessionId, savedNodes, onSaveNodes }) {
+function TreeBuilder({ scenario, onComplete, sessionId, presentationPosition, sessionHistory, savedNodes, onSaveNodes }) {
   const [nodes, setNodes] = useState(savedNodes || [{ id: 0, label: scenario.referenceNodes[0], parentId: null, isRoot: true, logic: null }]);
   const [selectedNode, setSelectedNode] = useState(null);
   const [newNodeLabel, setNewNodeLabel] = useState('');
@@ -503,14 +825,34 @@ function TreeBuilder({ scenario, onComplete, sessionId, savedNodes, onSaveNodes 
   const [startTime] = useState(Date.now());
   const [saved, setSaved] = useState(false);
   const [encouragement, setEncouragement] = useState('');
-  const [hintIndex, setHintIndex] = useState(0);
+  // hintLevel drives the Socratic ladder: 1 = open question, 2 = narrower
+  // question, 3 = concrete term. "Tell me more" advances it; a fresh
+  // "Show Hint" click starts back at level 1.
+  const [hintLevel, setHintLevel] = useState(1);
+  // Which matched node's explanation is currently expanded in the results
+  // view (click-to-explain scoring — see matchedDetails in evaluateTree).
+  const [expandedMatch, setExpandedMatch] = useState(null);
 
   const evaluation = evaluateTree(nodes, scenario);
+
+  // Cross-scenario pattern check, used both for hints and for fading below.
+  const pastMissingCategories = (sessionHistory || []).flatMap(h => h.missingCategories || []);
+  const hasRepeatedGap = evaluation.missingCategories.some(cat => pastMissingCategories.includes(cat));
 
   const autoFade = (newNodes) => {
     if (!scenario.scaffolded) return;
     const eval_ = evaluateTree(newNodes, scenario);
-    if (eval_.percentage >= 70 && scaffoldingLevel > 0) {
+    const repeatedGapNow = eval_.missingCategories.some(cat => pastMissingCategories.includes(cat));
+
+    if (eval_.percentage >= 70 && repeatedGapNow && scaffoldingLevel > 1) {
+      // Score looks strong, but this participant has missed the same
+      // category in an earlier scenario and is still missing it here —
+      // keep light-touch scaffolding rather than withdrawing it entirely.
+      // This is what makes fading respond to error *patterns*, not just a
+      // single overall score threshold.
+      setScaffoldingLevel(1);
+      setFadingMessage('Strong overall progress — but a category you also missed in an earlier scenario is still missing here, so hints stay available a little longer.');
+    } else if (eval_.percentage >= 70 && scaffoldingLevel > 0) {
       setScaffoldingLevel(0);
       setFadingMessage('Great progress! All scaffolding has been automatically withdrawn. You can still request help using the button below.');
     } else if (eval_.percentage >= 30 && scaffoldingLevel > 1) {
@@ -519,12 +861,7 @@ function TreeBuilder({ scenario, onComplete, sessionId, savedNodes, onSaveNodes 
     }
   };
 
-  const currentMissing = evaluation.missingCategories;
-  const effectiveHintIndex = currentMissing.length > 0 ? hintIndex % currentMissing.length : 0;
-  const smartHint = getSmartHint(
-    currentMissing.length > 0 ? [currentMissing[effectiveHintIndex], ...currentMissing] : [],
-    scenario
-  );
+  const socraticPrompt = getSocraticPrompt(nodes, scenario, evaluation, sessionHistory, hintLevel);
 
   const addNode = () => {
     if (!newNodeLabel.trim() || selectedNode === null) return;
@@ -538,7 +875,10 @@ function TreeBuilder({ scenario, onComplete, sessionId, savedNodes, onSaveNodes 
     if (newlyCovered.length > 0) {
       setEncouragement(`Great work! You identified a new attack category: "${newlyCovered[0]}". Keep going!`);
       setTimeout(() => setEncouragement(''), 4000);
-      setHintIndex(prev => prev + 1);
+      // Tree content just changed meaningfully — reset the Socratic hint
+      // ladder so the next "Show Hint" click starts from the open question
+      // again, rather than staying on a now-outdated deeper hint.
+      setHintLevel(1);
     }
 
     setNodes(newNodes);
@@ -581,7 +921,8 @@ function TreeBuilder({ scenario, onComplete, sessionId, savedNodes, onSaveNodes 
           percentage: evaluation.percentage,
           matched_nodes: evaluation.matchedNodes,
           time_spent: timeSpent,
-          scaffolding_level_final: scaffoldingLevel
+          scaffolding_level_final: scaffoldingLevel,
+          presentation_position: presentationPosition
         })
       });
     } catch (e) {
@@ -644,9 +985,9 @@ function TreeBuilder({ scenario, onComplete, sessionId, savedNodes, onSaveNodes 
             <SuggestionPanel suggestions={scenario.suggestions} onSelect={setNewNodeLabel} userNodes={nodes} />
           )}
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            <button onClick={() => { if (!showHint) setHintIndex(prev => prev + 1); setShowHint(!showHint); }}
+            <button onClick={() => { if (!showHint) setHintLevel(1); setShowHint(!showHint); }}
               style={{ background: '#f59e0b', color: '#000', border: 'none', padding: '6px 14px', borderRadius: 5, cursor: 'pointer', fontSize: 12, fontWeight: 'bold' }}>
-              {showHint ? 'Hide Hint' : '💡 Show Smart Hint'}
+              {showHint ? 'Hide Hint' : '💡 Show Hint'}
             </button>
             <button onClick={() => { setScaffoldingLevel(Math.max(0, scaffoldingLevel - 1)); setFadingMessage('Scaffolding manually reduced. You can still request help at any time.'); }}
               style={{ background: 'none', border: '1px solid #475569', color: '#94a3b8', padding: '6px 14px', borderRadius: 5, cursor: 'pointer', fontSize: 12 }}>
@@ -659,11 +1000,13 @@ function TreeBuilder({ scenario, onComplete, sessionId, savedNodes, onSaveNodes 
           </div>
           {showHint && (
             <div style={{ marginTop: 10, background: '#0f172a', borderRadius: 6, padding: 10 }}>
-              <p style={{ color: '#fcd34d', fontSize: 13 }}>💡 {smartHint}</p>
-              {evaluation.missingCategories.length > 0 && (
-                <p style={{ color: '#64748b', fontSize: 11, marginTop: 4 }}>
-                  Categories not yet covered: {evaluation.missingCategories.join(', ')}
-                </p>
+              <p style={{ color: '#64748b', fontSize: 10, marginBottom: 4, textTransform: 'uppercase', letterSpacing: 0.5 }}>Step {socraticPrompt.level}/3</p>
+              <p style={{ color: '#fcd34d', fontSize: 13 }}>💭 {socraticPrompt.question}</p>
+              {socraticPrompt.level < 3 && (
+                <button onClick={() => setHintLevel(l => Math.min(3, l + 1))}
+                  style={{ marginTop: 8, background: 'none', border: '1px solid #475569', color: '#94a3b8', padding: '4px 10px', borderRadius: 4, cursor: 'pointer', fontSize: 11 }}>
+                  Tell me more →
+                </button>
               )}
             </div>
           )}
@@ -675,7 +1018,7 @@ function TreeBuilder({ scenario, onComplete, sessionId, savedNodes, onSaveNodes 
         <div style={{ background: '#1e293b', borderRadius: 10, padding: 12, marginBottom: 16, borderLeft: '4px solid #475569' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <p style={{ color: '#6ee7b7', fontSize: 13 }}>✅ Working independently — scaffolding withdrawn</p>
-            <button onClick={() => { if (!showHint) setHintIndex(prev => prev + 1); setShowHint(!showHint); }}
+            <button onClick={() => { if (!showHint) setHintLevel(1); setShowHint(!showHint); }}
               style={{ background: '#334155', color: '#94a3b8', border: '1px solid #475569', padding: '5px 12px', borderRadius: 5, cursor: 'pointer', fontSize: 12 }}>
               {showHint ? 'Hide Help' : '🆘 Request Help'}
             </button>
@@ -683,11 +1026,13 @@ function TreeBuilder({ scenario, onComplete, sessionId, savedNodes, onSaveNodes 
           {showHint && (
             <div style={{ marginTop: 10 }}>
               <div style={{ background: '#0f172a', borderRadius: 6, padding: 10, marginBottom: 10 }}>
-                <p style={{ color: '#fcd34d', fontSize: 13 }}>💡 {smartHint}</p>
-                {evaluation.missingCategories.length > 0 && (
-                  <p style={{ color: '#64748b', fontSize: 11, marginTop: 4 }}>
-                    Categories not yet covered: {evaluation.missingCategories.join(', ')}
-                  </p>
+                <p style={{ color: '#64748b', fontSize: 10, marginBottom: 4, textTransform: 'uppercase', letterSpacing: 0.5 }}>Step {socraticPrompt.level}/3</p>
+                <p style={{ color: '#fcd34d', fontSize: 13 }}>💭 {socraticPrompt.question}</p>
+                {socraticPrompt.level < 3 && (
+                  <button onClick={() => setHintLevel(l => Math.min(3, l + 1))}
+                    style={{ marginTop: 8, background: 'none', border: '1px solid #475569', color: '#94a3b8', padding: '4px 10px', borderRadius: 4, cursor: 'pointer', fontSize: 11 }}>
+                    Tell me more →
+                  </button>
                 )}
               </div>
               {scenario.suggestions.length > 0 && (
@@ -781,7 +1126,30 @@ function TreeBuilder({ scenario, onComplete, sessionId, savedNodes, onSaveNodes 
             <div style={{ marginTop: 8, background: '#1e293b', borderRadius: 5, height: 10 }}>
               <div style={{ height: 10, borderRadius: 5, background: '#2563eb', width: `${evaluation.percentage}%` }} />
             </div>
-            {evaluation.matchedNodes.length > 0 && <p style={{ color: '#94a3b8', fontSize: 12, marginTop: 6 }}>Matched: {evaluation.matchedNodes.join(', ')}</p>}
+            {evaluation.matchedDetails && evaluation.matchedDetails.length > 0 && (
+              <div style={{ marginTop: 8 }}>
+                <p style={{ color: '#94a3b8', fontSize: 12, marginBottom: 6 }}>Matched (click any item to see why it was recognised):</p>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                  {evaluation.matchedDetails.map((m, i) => (
+                    <button key={i} onClick={() => setExpandedMatch(expandedMatch === m.referenceNode ? null : m.referenceNode)}
+                      style={{ background: expandedMatch === m.referenceNode ? '#166534' : '#0f172a', border: '1px solid #334155', color: '#6ee7b7', padding: '4px 10px', borderRadius: 12, cursor: 'pointer', fontSize: 11 }}>
+                      ✅ {m.referenceNode}
+                    </button>
+                  ))}
+                </div>
+                {expandedMatch && (() => {
+                  const detail = evaluation.matchedDetails.find(m => m.referenceNode === expandedMatch);
+                  if (!detail) return null;
+                  return (
+                    <div style={{ marginTop: 8, background: '#0f172a', borderRadius: 6, padding: 10, borderLeft: '3px solid #34d399' }}>
+                      <p style={{ color: '#94a3b8', fontSize: 11, marginBottom: 2 }}>Your node: <span style={{ color: 'white' }}>"{detail.userLabel}"</span></p>
+                      <p style={{ color: '#94a3b8', fontSize: 11, marginBottom: 2 }}>Match type: <span style={{ color: 'white' }}>{detail.explanation.type}</span></p>
+                      <p style={{ color: '#64748b', fontSize: 11, marginTop: 4 }}>{detail.explanation.detail}</p>
+                    </div>
+                  );
+                })()}
+              </div>
+            )}
           </div>
           <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
             <div style={{ flex: 1, minWidth: 250 }}>
@@ -853,8 +1221,34 @@ function Questionnaire({ onSubmit, sessionId }) {
   );
 }
 
+// Fisher-Yates shuffle — used to randomise presentation order within a group
+// of scenarios, to control for practice/order effects between participants.
+function shuffleArray(array) {
+  const arr = [...array];
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
+
+// Builds a per-participant presentation order: the 3 scaffolded scenarios are
+// shuffled among themselves, and the 2 transfer-task scenarios are shuffled
+// among themselves — but the scaffolded group always comes before the
+// transfer group, because the transfer task's validity depends on scaffolding
+// being experienced first.
+function buildScenarioOrder() {
+  const scaffoldedIds = SCENARIOS.filter(s => s.scaffolded).map(s => s.id);
+  const transferIds = SCENARIOS.filter(s => !s.scaffolded).map(s => s.id);
+  return [...shuffleArray(scaffoldedIds), ...shuffleArray(transferIds)];
+}
+
 function App() {
   const [currentScenario, setCurrentScenario] = useState(0);
+  const [scenarioOrder, setScenarioOrder] = useState(() => buildScenarioOrder());
+  // Cross-scenario history used to make fading/hints respond to patterns
+  // across the whole session, not just the current tree (see TreeBuilder).
+  const [sessionHistory, setSessionHistory] = useState([]);
   const [results, setResults] = useState([]);
   const [showQuestionnaire, setShowQuestionnaire] = useState(false);
   const [sessionComplete, setSessionComplete] = useState(false);
@@ -872,7 +1266,7 @@ function App() {
       const res = await fetch(`${API_URL}/api/session`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ participant_id: participantInput.trim() })
+        body: JSON.stringify({ participant_id: participantInput.trim(), scenario_order: scenarioOrder })
       });
       const data = await res.json();
       setSessionId(data.session_id);
@@ -882,16 +1276,27 @@ function App() {
     setSessionStarted(true);
   };
 
-  const scenario = SCENARIOS[currentScenario];
+  // orderedScenarios is this participant's randomised presentation order —
+  // scaffolded group first (shuffled), then transfer group (shuffled).
+  const orderedScenarios = scenarioOrder.map(id => SCENARIOS.find(s => s.id === id)).filter(Boolean);
+  const scenario = orderedScenarios[currentScenario] || SCENARIOS[0];
   const completedCount = results.length;
 
   const handleScenarioComplete = (evaluation) => {
     const existing = results.find(r => r.scenarioId === scenario.id);
     if (!existing) {
       setResults(prev => [...prev, { scenarioId: scenario.id, title: scenario.title, ...evaluation }]);
+      // Record what this participant struggled with on this scenario, so
+      // later scenarios' hints can respond to patterns across the session
+      // rather than only the current tree (see getSocraticPrompt).
+      setSessionHistory(prev => [...prev, {
+        scenarioId: scenario.id,
+        missingCategories: evaluation.missingCategories || [],
+        logicIssues: evaluation.logicIssues || []
+      }]);
     }
     // Advance to next scenario if available
-    if (currentScenario < SCENARIOS.length - 1) {
+    if (currentScenario < orderedScenarios.length - 1) {
       setCurrentScenario(currentScenario + 1);
     }
   };
@@ -936,7 +1341,7 @@ function App() {
       {tutorialComplete && (
         <>
           <div style={{ display: 'flex', gap: 6, marginBottom: 10, flexWrap: 'wrap' }}>
-            {SCENARIOS.map((s, i) => (
+            {orderedScenarios.map((s, i) => (
               <div key={s.id} onClick={() => { setShowQuestionnaire(false); setSessionComplete(false); setCurrentScenario(i); }}
                 style={{ flex: 1, minWidth: 100, padding: '6px 8px', borderRadius: 6, fontSize: 11, textAlign: 'center', cursor: 'pointer',
                 background: results.find(r => r.scenarioId === s.id) ? '#166534' : i === currentScenario ? '#2563eb' : '#1e293b',
@@ -950,7 +1355,7 @@ function App() {
 
           {completedCount > 0 && !showQuestionnaire && !sessionComplete && (
             <div style={{ marginBottom: 16, padding: '10px 16px', background: '#1e293b', borderRadius: 8, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span style={{ color: '#94a3b8', fontSize: 13 }}>{completedCount}/5 scenarios completed</span>
+              <span style={{ color: '#94a3b8', fontSize: 13 }}>{completedCount}/{orderedScenarios.length} scenarios completed</span>
               <button onClick={() => setShowQuestionnaire(true)}
                 style={{ padding: '6px 14px', background: '#10b981', color: 'white', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 13, fontWeight: 'bold' }}>
                 Go to Questionnaire →
@@ -972,6 +1377,8 @@ function App() {
                 scenario={scenario}
                 onComplete={handleScenarioComplete}
                 sessionId={sessionId}
+                presentationPosition={currentScenario + 1}
+                sessionHistory={sessionHistory}
                 savedNodes={savedTrees[currentScenario]}
                 onSaveNodes={(nodes) => setSavedTrees(prev => ({ ...prev, [currentScenario]: nodes }))}
               />

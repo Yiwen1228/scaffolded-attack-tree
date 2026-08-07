@@ -819,7 +819,24 @@ function TreeBuilder({ scenario, onComplete, sessionId, presentationPosition, se
   const [newNodeLabel, setNewNodeLabel] = useState('');
   const [newNodeLogic, setNewNodeLogic] = useState('OR');
   const [showHint, setShowHint] = useState(false);
-  const [scaffoldingLevel, setScaffoldingLevel] = useState(scenario.scaffolded ? 2 : 0);
+  // Re-visiting a scenario remounts this component (see key={currentScenario}
+  // in App), which would otherwise reset scaffolding back to full every time
+  // a participant switches tabs and comes back — even after it had already
+  // faded. Instead, derive the correct starting level from whatever nodes
+  // were already saved for this scenario, using the same thresholds and
+  // repeated-gap logic as autoFade below, so the displayed level matches
+  // actual progress rather than jumping back to "brand new".
+  const [scaffoldingLevel, setScaffoldingLevel] = useState(() => {
+    if (!scenario.scaffolded) return 0;
+    if (savedNodes && savedNodes.length > 0) {
+      const initialEval = evaluateTree(savedNodes, scenario);
+      const initialPastMissing = (sessionHistory || []).flatMap(h => h.missingCategories || []);
+      const initialRepeatedGap = initialEval.missingCategories.some(cat => initialPastMissing.includes(cat));
+      if (initialEval.percentage >= 70) return initialRepeatedGap ? 1 : 0;
+      if (initialEval.percentage >= 30) return 1;
+    }
+    return 2;
+  });
   const [showComparison, setShowComparison] = useState(false);
   const [fadingMessage, setFadingMessage] = useState('');
   const [startTime] = useState(Date.now());
@@ -844,17 +861,26 @@ function TreeBuilder({ scenario, onComplete, sessionId, presentationPosition, se
     const eval_ = evaluateTree(newNodes, scenario);
     const repeatedGapNow = eval_.missingCategories.some(cat => pastMissingCategories.includes(cat));
 
-    if (eval_.percentage >= 70 && repeatedGapNow && scaffoldingLevel > 1) {
-      // Score looks strong, but this participant has missed the same
-      // category in an earlier scenario and is still missing it here —
-      // keep light-touch scaffolding rather than withdrawing it entirely.
-      // This is what makes fading respond to error *patterns*, not just a
-      // single overall score threshold.
-      setScaffoldingLevel(1);
-      setFadingMessage('Strong overall progress — but a category you also missed in an earlier scenario is still missing here, so hints stay available a little longer.');
-    } else if (eval_.percentage >= 70 && scaffoldingLevel > 0) {
-      setScaffoldingLevel(0);
-      setFadingMessage('Great progress! All scaffolding has been automatically withdrawn. You can still request help using the button below.');
+    if (eval_.percentage >= 70) {
+      if (repeatedGapNow) {
+        // Score looks strong, but this participant has missed the same
+        // category in an earlier scenario and is still missing it here —
+        // keep light-touch scaffolding rather than withdrawing it entirely.
+        // The message must update here regardless of whether the LEVEL
+        // itself changes this call — otherwise, if the level had already
+        // faded to 1 earlier (crossing the 30% threshold on the way up),
+        // the banner would keep showing that older 30% message forever and
+        // never reflect that the 70% threshold was reached and held back.
+        setFadingMessage('Strong overall progress — but a category you also missed in an earlier scenario is still missing here, so hints stay available a little longer.');
+        if (scaffoldingLevel > 1) {
+          setScaffoldingLevel(1);
+        }
+        // If already at level 1, stay there — do not let the next
+        // withdrawal step take it to 0 while the pattern persists.
+      } else if (scaffoldingLevel > 0) {
+        setScaffoldingLevel(0);
+        setFadingMessage('Great progress! All scaffolding has been automatically withdrawn. You can still request help using the button below.');
+      }
     } else if (eval_.percentage >= 30 && scaffoldingLevel > 1) {
       setScaffoldingLevel(1);
       setFadingMessage('Good progress! Suggested categories have been removed. Hints and manual help are still available.');

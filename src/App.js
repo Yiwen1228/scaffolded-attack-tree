@@ -649,41 +649,30 @@ function generateLogicQuestion(issue, level) {
 }
 
 // The main Socratic hint function. It looks at the CURRENT tree's full
-// state — content, structure, logic relationships, and (if available)
-// patterns from the participant's earlier scenarios in this session — and
-// picks whichever issue is most useful to raise right now. Nothing here is
-// a fixed rotating script: the same tree state will always produce the same
+// state — content, structure, logic relationships — and picks whichever
+// issue is most useful to raise right now. Nothing here is a fixed
+// rotating script: the same tree state will always produce the same
 // diagnosis, but two different trees will very likely produce different
-// prompts.
+// prompts. Cross-scenario repeated-category patterns are handled
+// separately (see RepeatedGapReminder below) so that a persistent history
+// issue does not crowd out hints about the CURRENT tree's own content,
+// structure, or logic — a participant in scenario 3 should still get
+// help with scenario 3's specific problems, not just be told again about
+// something they missed in scenario 1.
 function getSocraticPrompt(nodes, scenario, evaluation, sessionHistory, hintLevel) {
-  // Priority 1: a category this participant has also missed in an earlier
-  // scenario this session — cross-scenario pattern, not just this tree.
-  if (sessionHistory && sessionHistory.length > 0) {
-    const pastMissing = sessionHistory.flatMap(h => h.missingCategories || []);
-    const repeatedCategory = evaluation.missingCategories.find(cat => pastMissing.includes(cat));
-    if (repeatedCategory) {
-      const base = generateCategoryQuestion(repeatedCategory, hintLevel);
-      return {
-        ...base,
-        question: hintLevel >= 2 ? base.question : `${base.question} (You've also missed this category in an earlier scenario — worth double-checking this time.)`,
-        source: 'pattern'
-      };
-    }
-  }
-
-  // Priority 2: an AND/OR logic relationship that looks wrong.
+  // Priority 1: an AND/OR logic relationship that looks wrong.
   const logicIssues = evaluation.logicIssues || [];
   if (logicIssues.length > 0) {
     return { ...generateLogicQuestion(logicIssues[0], hintLevel), source: 'logic' };
   }
 
-  // Priority 3: the tree is still flat (no node has been broken down further).
+  // Priority 2: the tree is still flat (no node has been broken down further).
   if (evaluation.maxDepth <= 1) {
     const shallow = findShallowNode(nodes);
     if (shallow) return { ...generateExpansionQuestion(shallow, hintLevel), source: 'structure' };
   }
 
-  // Priority 4: a missing attack category, based on the current tree only.
+  // Priority 3: a missing attack category, based on the current tree only.
   if (evaluation.missingCategories.length > 0) {
     return { ...generateCategoryQuestion(evaluation.missingCategories[0], hintLevel), source: 'category' };
   }
@@ -846,15 +835,25 @@ function TreeBuilder({ scenario, onComplete, sessionId, presentationPosition, se
   // question, 3 = concrete term. "Tell me more" advances it; a fresh
   // "Show Hint" click starts back at level 1.
   const [hintLevel, setHintLevel] = useState(1);
+  // Process-level hint usage tracking, saved alongside the final result —
+  // useful for analysing whether hint usage patterns relate to eventual
+  // performance (not just the final score/coverage).
+  const [hintOpenCount, setHintOpenCount] = useState(0);
+  const [maxHintLevelReached, setMaxHintLevelReached] = useState(0);
+  const [warningSourceCounts, setWarningSourceCounts] = useState({ logic: 0, structure: 0, category: 0, complete: 0 });
   // Which matched node's explanation is currently expanded in the results
   // view (click-to-explain scoring — see matchedDetails in evaluateTree).
   const [expandedMatch, setExpandedMatch] = useState(null);
 
   const evaluation = evaluateTree(nodes, scenario);
 
-  // Cross-scenario pattern check, used both for hints and for fading below.
+  // Cross-scenario pattern check, used both for the fading logic below and
+  // for the persistent reminder panel next to the tree — kept separate
+  // from the Socratic hint content so a recurring gap from an earlier
+  // scenario never crowds out hints about the CURRENT tree's own issues.
   const pastMissingCategories = (sessionHistory || []).flatMap(h => h.missingCategories || []);
-  const hasRepeatedGap = evaluation.missingCategories.some(cat => pastMissingCategories.includes(cat));
+  const repeatedMissingCategories = evaluation.missingCategories.filter(cat => pastMissingCategories.includes(cat));
+  const hasRepeatedGap = repeatedMissingCategories.length > 0;
 
   const autoFade = (newNodes) => {
     if (!scenario.scaffolded) return;
@@ -888,6 +887,26 @@ function TreeBuilder({ scenario, onComplete, sessionId, presentationPosition, se
   };
 
   const socraticPrompt = getSocraticPrompt(nodes, scenario, evaluation, sessionHistory, hintLevel);
+
+  // Shared handlers for the two "Show Hint" / "Request Help" buttons below,
+  // so hint usage is logged consistently regardless of which scaffolding
+  // state the participant is in when they open it.
+  const handleOpenHint = () => {
+    if (!showHint) {
+      setHintOpenCount(c => c + 1);
+      setMaxHintLevelReached(l => Math.max(l, 1));
+      setWarningSourceCounts(prev => ({ ...prev, [socraticPrompt.source]: (prev[socraticPrompt.source] || 0) + 1 }));
+      setHintLevel(1);
+    }
+    setShowHint(!showHint);
+  };
+  const handleTellMeMore = () => {
+    setHintLevel(l => {
+      const next = Math.min(3, l + 1);
+      setMaxHintLevelReached(prevMax => Math.max(prevMax, next));
+      return next;
+    });
+  };
 
   const addNode = () => {
     if (!newNodeLabel.trim() || selectedNode === null) return;
@@ -948,7 +967,12 @@ function TreeBuilder({ scenario, onComplete, sessionId, presentationPosition, se
           matched_nodes: evaluation.matchedNodes,
           time_spent: timeSpent,
           scaffolding_level_final: scaffoldingLevel,
-          presentation_position: presentationPosition
+          presentation_position: presentationPosition,
+          hint_open_count: hintOpenCount,
+          max_hint_level: maxHintLevelReached,
+          logic_warning_count: warningSourceCounts.logic || 0,
+          structure_warning_count: warningSourceCounts.structure || 0,
+          category_warning_count: warningSourceCounts.category || 0
         })
       });
     } catch (e) {
@@ -1011,7 +1035,7 @@ function TreeBuilder({ scenario, onComplete, sessionId, presentationPosition, se
             <SuggestionPanel suggestions={scenario.suggestions} onSelect={setNewNodeLabel} userNodes={nodes} />
           )}
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            <button onClick={() => { if (!showHint) setHintLevel(1); setShowHint(!showHint); }}
+            <button onClick={handleOpenHint}
               style={{ background: '#f59e0b', color: '#000', border: 'none', padding: '6px 14px', borderRadius: 5, cursor: 'pointer', fontSize: 12, fontWeight: 'bold' }}>
               {showHint ? 'Hide Hint' : '💡 Show Hint'}
             </button>
@@ -1029,7 +1053,7 @@ function TreeBuilder({ scenario, onComplete, sessionId, presentationPosition, se
               <p style={{ color: '#64748b', fontSize: 10, marginBottom: 4, textTransform: 'uppercase', letterSpacing: 0.5 }}>Step {socraticPrompt.level}/3</p>
               <p style={{ color: '#fcd34d', fontSize: 13 }}>💭 {socraticPrompt.question}</p>
               {socraticPrompt.level < 3 && (
-                <button onClick={() => setHintLevel(l => Math.min(3, l + 1))}
+                <button onClick={handleTellMeMore}
                   style={{ marginTop: 8, background: 'none', border: '1px solid #475569', color: '#94a3b8', padding: '4px 10px', borderRadius: 4, cursor: 'pointer', fontSize: 11 }}>
                   Tell me more →
                 </button>
@@ -1044,7 +1068,7 @@ function TreeBuilder({ scenario, onComplete, sessionId, presentationPosition, se
         <div style={{ background: '#1e293b', borderRadius: 10, padding: 12, marginBottom: 16, borderLeft: '4px solid #475569' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <p style={{ color: '#6ee7b7', fontSize: 13 }}>✅ Working independently — scaffolding withdrawn</p>
-            <button onClick={() => { if (!showHint) setHintLevel(1); setShowHint(!showHint); }}
+            <button onClick={handleOpenHint}
               style={{ background: '#334155', color: '#94a3b8', border: '1px solid #475569', padding: '5px 12px', borderRadius: 5, cursor: 'pointer', fontSize: 12 }}>
               {showHint ? 'Hide Help' : '🆘 Request Help'}
             </button>
@@ -1055,7 +1079,7 @@ function TreeBuilder({ scenario, onComplete, sessionId, presentationPosition, se
                 <p style={{ color: '#64748b', fontSize: 10, marginBottom: 4, textTransform: 'uppercase', letterSpacing: 0.5 }}>Step {socraticPrompt.level}/3</p>
                 <p style={{ color: '#fcd34d', fontSize: 13 }}>💭 {socraticPrompt.question}</p>
                 {socraticPrompt.level < 3 && (
-                  <button onClick={() => setHintLevel(l => Math.min(3, l + 1))}
+                  <button onClick={handleTellMeMore}
                     style={{ marginTop: 8, background: 'none', border: '1px solid #475569', color: '#94a3b8', padding: '4px 10px', borderRadius: 4, cursor: 'pointer', fontSize: 11 }}>
                     Tell me more →
                   </button>
@@ -1069,6 +1093,14 @@ function TreeBuilder({ scenario, onComplete, sessionId, presentationPosition, se
               )}
             </div>
           )}
+        </div>
+      )}
+
+      {repeatedMissingCategories.length > 0 && (
+        <div style={{ background: '#422006', border: '1px solid #92400e', borderRadius: 8, padding: 10, marginBottom: 12 }}>
+          <p style={{ color: '#fbbf24', fontSize: 12, lineHeight: 1.6 }}>
+            🔁 Worth double-checking: you also missed <strong>{repeatedMissingCategories.join(', ')}</strong> in an earlier scenario this session — still missing here too.
+          </p>
         </div>
       )}
 
@@ -1403,7 +1435,7 @@ function App() {
                 scenario={scenario}
                 onComplete={handleScenarioComplete}
                 sessionId={sessionId}
-                presentationPosition={currentScenario + 1}
+                presentationPosition={results.length + 1}
                 sessionHistory={sessionHistory}
                 savedNodes={savedTrees[currentScenario]}
                 onSaveNodes={(nodes) => setSavedTrees(prev => ({ ...prev, [currentScenario]: nodes }))}

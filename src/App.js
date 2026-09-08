@@ -1229,48 +1229,77 @@ function TreeBuilder({ scenario, onComplete, sessionId, presentationPosition, se
   );
 }
 
+// Group A (full flow) answers q1-q5 about the scaffolding they used.
+// Group B (control) never sees scaffolding, so they answer q6-q8 instead —
+// a shorter set that never references scaffolding. q5 and q8 ask the same
+// "overall ease of use" question in identical wording but are stored in
+// separate columns, so each group's answer to it can be compared directly
+// without asking anyone the same question twice.
 function Questionnaire({ onSubmit, sessionId }) {
-  const [answers, setAnswers] = useState({ q1: '', q2: '', q3: '', q4: '', q5: '' });
-  const questions = [
+  const [answers, setAnswers] = useState({ q1: '', q2: '', q3: '', q4: '', q5: '', q6: '', q7: '', q8: '' });
+  const questionsA = [
     { id: 'q1', text: 'The scaffolding support (suggestions and hints) helped me understand what to include in my attack tree.' },
     { id: 'q2', text: 'The expandable suggestion categories with explanations made it easier to identify and add specific attacks.' },
     { id: 'q3', text: 'The automatic reduction of scaffolding felt natural — I did not feel lost when support was reduced.' },
     { id: 'q4', text: 'I felt more confident constructing the unscaffolded trees after completing the scaffolded ones.' },
     { id: 'q5', text: 'Overall, the tool was easy to use and understand.' },
   ];
+  const questionsB = [
+    { id: 'q6', text: 'The tutorial gave me a clear understanding of what an attack tree should include.' },
+    { id: 'q7', text: 'I felt confident about what to include in my attack trees.' },
+    { id: 'q8', text: 'Overall, the tool was easy to use and understand.' },
+  ];
   const scale = ['1\nStrongly\nDisagree', '2\nDisagree', '3\nNeutral', '4\nAgree', '5\nStrongly\nAgree'];
-  const allAnswered = Object.values(answers).every(a => a !== '');
+
+  const groupAAnswered = questionsA.every(q => answers[q.id] !== '');
+  const groupBAnswered = questionsB.every(q => answers[q.id] !== '');
+  const allAnswered = groupAAnswered || groupBAnswered;
 
   const handleSubmit = async () => {
+    // Send all eight keys so the database row shape is always consistent —
+    // whichever group didn't answer a question sends null for it.
+    const fullAnswers = {};
+    ['q1', 'q2', 'q3', 'q4', 'q5', 'q6', 'q7', 'q8'].forEach(id => {
+      fullAnswers[id] = answers[id] === '' ? null : answers[id];
+    });
     try {
       await fetch(`${API_URL}/api/questionnaire`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ session_id: sessionId, answers })
+        body: JSON.stringify({ session_id: sessionId, answers: fullAnswers })
       });
     } catch (e) {
       console.log('Backend not available');
     }
-    onSubmit(answers);
+    onSubmit(fullAnswers);
   };
+
+  const renderQuestion = (q, displayNum) => (
+    <div key={q.id} style={{ marginBottom: 20 }}>
+      <p style={{ fontSize: 14, marginBottom: 8 }}>{displayNum}. {q.text}</p>
+      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+        {scale.map((label, val) => (
+          <button key={val} onClick={() => setAnswers({ ...answers, [q.id]: val + 1 })}
+            style={{ padding: '8px 12px', borderRadius: 6, border: '1px solid #334155', background: answers[q.id] === val + 1 ? '#2563eb' : '#0f172a', color: 'white', cursor: 'pointer', fontSize: 11, whiteSpace: 'pre-line', lineHeight: 1.4, textAlign: 'center' }}>
+            {label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
 
   return (
     <div style={{ background: '#1e293b', borderRadius: 10, padding: 20, maxWidth: 720 }}>
       <h2 style={{ fontSize: 18, fontWeight: 'bold', marginBottom: 6 }}>📝 Usability Questionnaire</h2>
-      <p style={{ color: '#94a3b8', fontSize: 13, marginBottom: 20 }}>Please rate each statement from 1 (Strongly Disagree) to 5 (Strongly Agree).</p>
-      {questions.map((q, i) => (
-        <div key={q.id} style={{ marginBottom: 20 }}>
-          <p style={{ fontSize: 14, marginBottom: 8 }}>{i + 1}. {q.text}</p>
-          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-            {scale.map((label, val) => (
-              <button key={val} onClick={() => setAnswers({ ...answers, [q.id]: val + 1 })}
-                style={{ padding: '8px 12px', borderRadius: 6, border: '1px solid #334155', background: answers[q.id] === val + 1 ? '#2563eb' : '#0f172a', color: 'white', cursor: 'pointer', fontSize: 11, whiteSpace: 'pre-line', lineHeight: 1.4, textAlign: 'center' }}>
-                {label}
-              </button>
-            ))}
-          </div>
-        </div>
-      ))}
+      <p style={{ color: '#94a3b8', fontSize: 13, marginBottom: 8 }}>Please rate each statement from 1 (Strongly Disagree) to 5 (Strongly Agree).</p>
+      <div style={{ background: '#0f172a', border: '1px solid #334155', borderRadius: 8, padding: 12, marginBottom: 20 }}>
+        <p style={{ color: '#fcd34d', fontSize: 12.5, lineHeight: 1.6 }}>
+          ℹ️ If you completed the <strong>full sequence</strong> (scaffolded scenarios then transfer scenarios), please answer questions <strong>1–5</strong>.
+          If you only completed the scenarios <strong>without scaffolding</strong>, please answer questions <strong>6–8</strong>.
+        </p>
+      </div>
+      {questionsA.map((q, i) => renderQuestion(q, i + 1))}
+      {questionsB.map((q, i) => renderQuestion(q, i + 6))}
       <button onClick={handleSubmit} disabled={!allAnswered}
         style={{ marginTop: 10, padding: '10px 24px', background: allAnswered ? '#10b981' : '#334155', color: 'white', border: 'none', borderRadius: 6, cursor: allAnswered ? 'pointer' : 'not-allowed', fontSize: 14, fontWeight: 'bold' }}>
         Submit Questionnaire
